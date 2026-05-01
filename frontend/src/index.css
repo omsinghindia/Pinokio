@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  /* Hex matches tailwind theme binokio.dark — avoid @apply bg-binokio-dark (PostCSS/Tailwind resolution quirk). */
+  background-color: #0f0a0c;
+  @apply text-white font-body min-h-screen antialiased;
+  margin: 0;
+}
+
+#root {
+  min-height: 100dvh;
+  min-height: 100vh;
+}
+
+/* Chat scroll areas */
+.chat-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.chat-scroll::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-white/20;
+}
