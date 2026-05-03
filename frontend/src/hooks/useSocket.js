@@ -7,10 +7,23 @@ import { useAuth } from '../contexts/AuthContext';
  * Local dev: same origin as Vite so `/socket.io` is proxied to the backend (see vite.config.js).
  */
 function getSocketBaseUrl () {
-  const fromEnv = import.meta.env.VITE_SOCKET_URL;
-  if (fromEnv) return fromEnv;
+  const fromEnv = import.meta.env.VITE_SOCKET_URL?.trim();
+  if (fromEnv) return fromEnv.replace(/\/$/, '');
   if (import.meta.env.DEV) return window.location.origin;
+  if (typeof window !== 'undefined') {
+    return window.location.origin;
+  }
   return 'http://localhost:4000';
+}
+
+/** Some mobile networks block WebSocket initially; try polling first. */
+function socketTransports () {
+  if (typeof navigator === 'undefined') return ['websocket', 'polling'];
+  const ua = navigator.userAgent || '';
+  if (/iPhone|iPad|iPod|Android/i.test(ua)) {
+    return ['polling', 'websocket'];
+  }
+  return ['websocket', 'polling'];
 }
 
 /**
@@ -29,9 +42,18 @@ export function useSocket () {
       return;
     }
 
-    const s = io(getSocketBaseUrl(), {
+    const base = getSocketBaseUrl();
+    if (import.meta.env.PROD && !import.meta.env.VITE_SOCKET_URL?.trim()) {
+      console.error(
+        'BINOKIO: VITE_SOCKET_URL is missing — chat and typing will not work on this deploy. Add it in Vercel (or your host) and redeploy.'
+      );
+    }
+
+    const s = io(base, {
       auth: { token: accessToken },
-      transports: ['websocket', 'polling']
+      transports: socketTransports(),
+      upgrade: true,
+      rememberUpgrade: false
     });
 
     setSocket(s);

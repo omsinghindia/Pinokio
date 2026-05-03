@@ -11,9 +11,9 @@ export default function Landing () {
         <span className="text-binokio-accent">gets you</span>
       </h1>
       <p className="mt-4 max-w-md text-sm leading-relaxed text-binokio-muted sm:text-base">
-        BINOKIO matches you with real people. Chat in real time and jump into a
-        voice or video call when you are both ready — only after a mutual match.
-        Works beautifully on phones and tablets.
+        BINOKIO matches you with real people. Chat in real time once you have a
+        mutual match — with photos, voice notes, and location when you want to
+        share. Works on phones and tablets.
       </p>
       <div className="mt-8 flex w-full max-w-md flex-col gap-3 xs:flex-row xs:flex-wrap xs:justify-center sm:mt-10">
         <Link

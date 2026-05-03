@@ -4,7 +4,6 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSocket } from '../hooks/useSocket';
 import { supabase } from '../lib/supabaseClient';
 import { uploadChatAttachment, pickRecorderMime } from '../lib/chatUpload';
-import { ICE_SERVERS } from '../lib/webrtc';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ChatMessageBubble from '../components/chat/ChatMessageBubble';
 
@@ -52,68 +51,11 @@ export default function Chat () {
   const lastLiveEmitRef = useRef(0);
   const [partnerLiveLoc, setPartnerLiveLoc] = useState(null);
 
-  const pcRef = useRef(null);
-  const localStreamRef = useRef(null);
-  const localVideoRef = useRef(null);
-  const remoteVideoRef = useRef(null);
   const partnerIdRef = useRef(null);
-  /** ICE candidates received before setRemoteDescription completes (common on fast networks). */
-  const pendingIceRef = useRef([]);
-  /** Caller user id (offer) so Accept works if partnerId state is still loading. */
-  const incomingFromUserIdRef = useRef(null);
-  const [inCall, setInCall] = useState(false);
-  const [incomingOffer, setIncomingOffer] = useState(null);
-  const [camOn, setCamOn] = useState(true);
-  const [micOn, setMicOn] = useState(true);
 
   useEffect(() => {
     partnerIdRef.current = partnerId;
   }, [partnerId]);
-
-  const endCallLocal = useCallback(() => {
-    pendingIceRef.current = [];
-    incomingFromUserIdRef.current = null;
-    if (pcRef.current) {
-      pcRef.current.close();
-      pcRef.current = null;
-    }
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((t) => t.stop());
-      localStreamRef.current = null;
-    }
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = null;
-    }
-    if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = null;
-    }
-    setInCall(false);
-    setIncomingOffer(null);
-    setCamOn(true);
-    setMicOn(true);
-  }, []);
-
-  /** Match-scoped peer: server only relays between matched users; allow before partnerId hydrates. */
-  function isMediaPeer (fromUserId, mid) {
-    if (!fromUserId || String(mid) !== String(matchId)) return false;
-    if (String(fromUserId) === String(user.id)) return false;
-    const expected = partnerIdRef.current;
-    if (expected && String(fromUserId) !== String(expected)) return false;
-    return true;
-  }
-
-  async function flushPendingIce (pc) {
-    if (!pc) return;
-    const batch = pendingIceRef.current;
-    pendingIceRef.current = [];
-    for (const candidate of batch) {
-      try {
-        await pc.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (e) {
-        console.warn('BINOKIO: addIceCandidate', e);
-      }
-    }
-  }
 
   const stopLiveShare = useCallback((mid) => {
     const id = mid ?? matchId;
@@ -161,7 +103,6 @@ export default function Chat () {
       socketRef.current.emit('location:live:stop', { matchId });
     }
     setLiveSharing(false);
-    endCallLocal();
 
     (async () => {
       const { data: match, error: mErr } = await supabase
@@ -219,9 +160,8 @@ export default function Chat () {
         liveWatchIdRef.current = null;
       }
       socketRef.current?.emit('location:live:stop', { matchId });
-      endCallLocal();
     };
-  }, [matchId, user.id, endCallLocal]);
+  }, [matchId, user.id]);
 
   useEffect(() => {
     if (!socket || !matchId) return;
@@ -282,47 +222,6 @@ export default function Chat () {
       setTyping(false);
     }
 
-    function onOffer ({ fromUserId, matchId: mid, sdp }) {
-      if (!isMediaPeer(fromUserId, mid)) return;
-      if (!sdp?.type || typeof sdp.sdp !== 'string') return;
-      incomingFromUserIdRef.current = fromUserId;
-      setIncomingOffer({ type: sdp.type, sdp: sdp.sdp });
-    }
-
-    async function onAnswer ({ fromUserId, matchId: mid, sdp }) {
-      if (!isMediaPeer(fromUserId, mid)) return;
-      const pc = pcRef.current;
-      if (!pc || !sdp?.type || typeof sdp.sdp !== 'string') return;
-      try {
-        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-        await flushPendingIce(pc);
-      } catch (e) {
-        console.error('BINOKIO: setRemoteDescription (answer)', e);
-      }
-    }
-
-    function onIce ({ fromUserId, matchId: mid, candidate }) {
-      if (!isMediaPeer(fromUserId, mid) || !candidate) return;
-      const pc = pcRef.current;
-      if (!pc || !pc.remoteDescription?.type) {
-        pendingIceRef.current.push(candidate);
-        return;
-      }
-      pc.addIceCandidate(new RTCIceCandidate(candidate)).catch((e) =>
-        console.warn('BINOKIO: addIceCandidate', e)
-      );
-    }
-
-    function onCallReject ({ fromUserId, matchId: mid }) {
-      if (!isMediaPeer(fromUserId, mid)) return;
-      endCallLocal();
-    }
-
-    function onCallEnd ({ fromUserId, matchId: mid }) {
-      if (!isMediaPeer(fromUserId, mid)) return;
-      endCallLocal();
-    }
-
     function onLiveLoc (p) {
       if (String(p.matchId) !== String(matchId)) return;
       if (!p.userId || String(p.userId) === String(user.id)) return;
@@ -345,11 +244,6 @@ export default function Chat () {
     socket.on('user:presence', onPresence);
     socket.on('typing:start', onTypingStart);
     socket.on('typing:stop', onTypingStop);
-    socket.on('webrtc:offer', onOffer);
-    socket.on('webrtc:answer', onAnswer);
-    socket.on('webrtc:ice', onIce);
-    socket.on('call:reject', onCallReject);
-    socket.on('call:end', onCallEnd);
     socket.on('location:live', onLiveLoc);
     socket.on('location:live:stop', onLiveStop);
 
@@ -358,15 +252,10 @@ export default function Chat () {
       socket.off('user:presence', onPresence);
       socket.off('typing:start', onTypingStart);
       socket.off('typing:stop', onTypingStop);
-      socket.off('webrtc:offer', onOffer);
-      socket.off('webrtc:answer', onAnswer);
-      socket.off('webrtc:ice', onIce);
-      socket.off('call:reject', onCallReject);
-      socket.off('call:end', onCallEnd);
       socket.off('location:live', onLiveLoc);
       socket.off('location:live:stop', onLiveStop);
     };
-  }, [socket, matchId, user.id, endCallLocal]);
+  }, [socket, matchId, user.id]);
 
   useEffect(() => {
     const last = messages[messages.length - 1];
@@ -581,161 +470,6 @@ export default function Chat () {
     await sendFile('audio', file);
   }
 
-  async function startCall () {
-    if (!socket || !partnerId) return;
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true
-      });
-      localStreamRef.current = stream;
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
-      }
-
-      const pc = new RTCPeerConnection(ICE_SERVERS);
-      pcRef.current = pc;
-
-      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-
-      pc.onicecandidate = (ev) => {
-        if (ev.candidate && socket) {
-          socket.emit('webrtc:ice', {
-            toUserId: partnerId,
-            matchId,
-            candidate: ev.candidate.toJSON()
-          });
-        }
-      };
-
-      pc.ontrack = (ev) => {
-        if (remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject = ev.streams[0];
-        }
-      };
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      socket.emit('call:invite', { toUserId: partnerId, matchId });
-      socket.emit('webrtc:offer', {
-        toUserId: partnerId,
-        matchId,
-        sdp: {
-          type: pc.localDescription.type,
-          sdp: pc.localDescription.sdp
-        }
-      });
-
-      setInCall(true);
-    } catch (err) {
-      console.error(err);
-      setSendError('Could not access camera/microphone.');
-      endCallLocal();
-    }
-  }
-
-  async function acceptCall () {
-    const remotePeerId = partnerId || incomingFromUserIdRef.current;
-    if (!socket || !incomingOffer || !remotePeerId) {
-      setSendError('Still connecting — wait a moment and try Accept again.');
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true
-      });
-      localStreamRef.current = stream;
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
-      }
-
-      const pc = new RTCPeerConnection(ICE_SERVERS);
-      pcRef.current = pc;
-
-      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-
-      pc.onicecandidate = (ev) => {
-        if (ev.candidate && socket) {
-          socket.emit('webrtc:ice', {
-            toUserId: remotePeerId,
-            matchId,
-            candidate: ev.candidate.toJSON()
-          });
-        }
-      };
-
-      pc.ontrack = (ev) => {
-        if (remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject = ev.streams[0];
-        }
-      };
-
-      await pc.setRemoteDescription(new RTCSessionDescription(incomingOffer));
-      await flushPendingIce(pc);
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-
-      socket.emit('webrtc:answer', {
-        toUserId: remotePeerId,
-        matchId,
-        sdp: {
-          type: pc.localDescription.type,
-          sdp: pc.localDescription.sdp
-        }
-      });
-
-      setIncomingOffer(null);
-      incomingFromUserIdRef.current = null;
-      setInCall(true);
-    } catch (err) {
-      console.error(err);
-      const hint =
-        err?.name === 'NotAllowedError'
-          ? 'Camera or microphone permission denied.'
-          : err?.message || 'Could not answer call.';
-      setSendError(hint);
-      endCallLocal();
-    }
-  }
-
-  function rejectCall () {
-    const remotePeerId = partnerId || incomingFromUserIdRef.current;
-    if (socket && remotePeerId) {
-      socket.emit('call:reject', { toUserId: remotePeerId, matchId });
-    }
-    setIncomingOffer(null);
-    incomingFromUserIdRef.current = null;
-  }
-
-  function endCall () {
-    if (socket && partnerId) {
-      socket.emit('call:end', { toUserId: partnerId, matchId });
-    }
-    endCallLocal();
-  }
-
-  function toggleMic () {
-    const s = localStreamRef.current;
-    if (!s) return;
-    const audio = s.getAudioTracks()[0];
-    if (audio) {
-      audio.enabled = !audio.enabled;
-      setMicOn(audio.enabled);
-    }
-  }
-
-  function toggleCam () {
-    const s = localStreamRef.current;
-    if (!s) return;
-    const video = s.getVideoTracks()[0];
-    if (video) {
-      video.enabled = !video.enabled;
-      setCamOn(video.enabled);
-    }
-  }
-
   const partnerInitial =
     partner?.full_name?.trim()?.[0]?.toUpperCase() || '?';
 
@@ -755,7 +489,7 @@ export default function Chat () {
   }
 
   return (
-    <div className="flex min-h-[calc(100dvh-10.5rem)] flex-col gap-3 sm:min-h-[calc(100dvh-9rem)] sm:gap-4 lg:h-[calc(100vh-8rem)] lg:min-h-0">
+    <div className="flex min-h-0 flex-1 flex-col gap-2 sm:gap-3">
       <input
         ref={imageInputRef}
         type="file"
@@ -770,124 +504,46 @@ export default function Chat () {
         onChange={onDocPick}
       />
 
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-gradient-to-r from-binokio-card/90 to-black/40 px-4 py-3 backdrop-blur-md">
-        <div className="flex min-w-0 items-center gap-3">
-          <Link
-            to="/matches"
-            className="shrink-0 text-sm text-binokio-muted transition hover:text-white"
-          >
-            ←
-          </Link>
-          <div className="h-11 w-11 shrink-0 overflow-hidden rounded-full border-2 border-binokio-accent/30 bg-black/40 shadow-lg shadow-black/40">
-            {partner?.avatar_url ? (
-              <img
-                src={partner.avatar_url}
-                alt=""
-                className="h-full w-full object-cover"
-              />
-            ) : (
-              <div className="flex h-full items-center justify-center text-lg font-semibold text-white/50">
-                {partnerInitial}
-              </div>
-            )}
-          </div>
-          <div className="min-w-0">
-            <h1 className="font-display truncate text-lg font-bold leading-tight">
-              {partner?.full_name || 'Chat'}
-            </h1>
-            <p className="text-xs text-binokio-muted">
-              {partnerOnline ? (
-                <span className="text-emerald-400">Online</span>
-              ) : (
-                <span>Offline</span>
-              )}
-              {typing ? ' · typing…' : null}
-              {liveSharing ? ' · sharing live location' : null}
-            </p>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={startCall}
-          disabled={!socket || inCall || !!incomingOffer}
-          className="min-h-[44px] shrink-0 rounded-full bg-binokio-accent px-4 py-2 text-sm font-semibold shadow-lg shadow-binokio-accent/25 disabled:opacity-40"
+      <div className="flex shrink-0 items-center gap-2 rounded-2xl border border-white/10 bg-gradient-to-r from-binokio-card/90 to-black/40 px-3 py-2.5 backdrop-blur-md sm:gap-3 sm:px-4 sm:py-3">
+        <Link
+          to="/matches"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/10 text-sm text-binokio-muted transition hover:border-white/20 hover:text-white"
+          aria-label="Back to matches"
         >
-          Video call
-        </button>
-      </div>
-
-      {incomingOffer ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
-          <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-binokio-card p-6 text-center">
-            <p className="text-lg font-semibold">Incoming call</p>
-            <p className="mt-1 text-sm text-binokio-muted">
-              {partner?.full_name || 'Your match'} wants to connect
-            </p>
-            <div className="mt-6 flex justify-center gap-3">
-              <button
-                type="button"
-                onClick={rejectCall}
-                className="rounded-full border border-white/20 px-5 py-2 text-sm"
-              >
-                Decline
-              </button>
-              <button
-                type="button"
-                onClick={acceptCall}
-                className="rounded-full bg-emerald-500 px-5 py-2 text-sm font-semibold text-black"
-              >
-                Accept
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {inCall ? (
-        <div className="fixed inset-0 z-40 flex flex-col bg-black/95 p-4">
-          <div className="relative flex-1 overflow-hidden rounded-2xl bg-black">
-            <video
-              ref={remoteVideoRef}
-              autoPlay
-              playsInline
+          ←
+        </Link>
+        <div className="h-10 w-10 shrink-0 overflow-hidden rounded-full border-2 border-binokio-accent/30 bg-black/40 shadow-lg shadow-black/40 sm:h-11 sm:w-11">
+          {partner?.avatar_url ? (
+            <img
+              src={partner.avatar_url}
+              alt=""
               className="h-full w-full object-cover"
             />
-            <video
-              ref={localVideoRef}
-              autoPlay
-              playsInline
-              muted
-              className="absolute bottom-4 right-4 h-28 w-36 rounded-xl border border-white/20 object-cover shadow-lg"
-            />
-          </div>
-          <div className="mt-4 flex flex-wrap justify-center gap-3">
-            <button
-              type="button"
-              onClick={toggleMic}
-              className="rounded-full bg-white/10 px-4 py-2 text-sm"
-            >
-              {micOn ? 'Mute' : 'Unmute'}
-            </button>
-            <button
-              type="button"
-              onClick={toggleCam}
-              className="rounded-full bg-white/10 px-4 py-2 text-sm"
-            >
-              {camOn ? 'Camera off' : 'Camera on'}
-            </button>
-            <button
-              type="button"
-              onClick={endCall}
-              className="rounded-full bg-red-500 px-6 py-2 text-sm font-semibold"
-            >
-              End call
-            </button>
-          </div>
+          ) : (
+            <div className="flex h-full items-center justify-center text-base font-semibold text-white/50 sm:text-lg">
+              {partnerInitial}
+            </div>
+          )}
         </div>
-      ) : null}
+        <div className="min-w-0 flex-1">
+          <h1 className="font-display truncate text-base font-bold leading-tight sm:text-lg">
+            {partner?.full_name || 'Chat'}
+          </h1>
+          <p className="truncate text-[11px] text-binokio-muted sm:text-xs">
+            {!socket ? (
+              <span className="text-amber-300/90">Connecting…</span>
+            ) : partnerOnline ? (
+              <span className="text-emerald-400">Online</span>
+            ) : (
+              <span>Offline</span>
+            )}
+            {typing ? ' · typing…' : null}
+            {liveSharing ? ' · sharing live location' : null}
+          </p>
+        </div>
+      </div>
 
-      <div className="relative flex flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-b from-binokio-card/50 to-black/30 shadow-xl shadow-black/20">
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-b from-binokio-card/50 to-black/30 shadow-xl shadow-black/20">
         {partnerLiveLoc ? (
           <div className="flex items-center justify-between gap-2 border-b border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs sm:text-sm">
             <span className="text-emerald-100">
@@ -971,7 +627,7 @@ export default function Chat () {
           className="relative border-t border-white/10 p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:p-3"
         >
           {attachOpen ? (
-            <div className="absolute bottom-full left-2 z-20 mb-2 w-[min(calc(100vw-2rem),280px)] rounded-2xl border border-white/10 bg-binokio-card/95 p-2 shadow-2xl backdrop-blur-md">
+            <div className="absolute bottom-full left-0 right-0 z-20 mb-2 max-h-[min(70dvh,320px)] overflow-y-auto rounded-2xl border border-white/10 bg-binokio-card/95 p-2 shadow-2xl backdrop-blur-md sm:left-2 sm:right-auto sm:w-[min(calc(100vw-2rem),280px)]">
               <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-binokio-muted">
                 Attach
               </p>
@@ -1014,12 +670,12 @@ export default function Chat () {
             </div>
           ) : null}
 
-          <div className="flex items-end gap-1.5 sm:gap-2">
+          <div className="flex min-w-0 items-end gap-1.5 sm:gap-2">
             <button
               type="button"
               onClick={() => setAttachOpen((o) => !o)}
               disabled={!socket || uploading || recording}
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/5 text-lg leading-none transition hover:bg-white/10 disabled:opacity-40"
+              className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-full border border-white/15 bg-white/5 text-lg leading-none transition hover:bg-white/10 disabled:opacity-40"
               aria-label="Attach"
             >
               +
@@ -1030,10 +686,12 @@ export default function Chat () {
               placeholder={
                 uploading
                   ? 'Uploading…'
-                  : 'Message, caption, or tap + to attach…'
+                  : 'Message…'
               }
               disabled={uploading || recording}
-              className="min-h-[44px] flex-1 rounded-2xl border border-white/10 bg-black/35 px-4 py-2.5 text-base outline-none ring-binokio-accent focus:ring-2 sm:text-sm"
+              autoComplete="off"
+              autoCorrect="off"
+              className="min-h-[44px] min-w-0 flex-1 rounded-2xl border border-white/10 bg-black/35 px-3 py-2.5 text-base outline-none ring-binokio-accent focus:ring-2 sm:px-4 sm:text-sm"
             />
             {recording ? null : (
               <button
@@ -1042,7 +700,7 @@ export default function Chat () {
                   recording ? stopRecording(true) : startRecording()
                 }
                 disabled={!socket || uploading}
-                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/5 text-lg transition hover:bg-white/10 disabled:opacity-40"
+                className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-full border border-white/15 bg-white/5 text-lg transition hover:bg-white/10 disabled:opacity-40"
                 aria-label="Voice message"
               >
                 🎤
@@ -1051,7 +709,7 @@ export default function Chat () {
             <button
               type="submit"
               disabled={!socket || !input.trim() || uploading || recording}
-              className="min-h-[44px] shrink-0 rounded-2xl bg-binokio-accent px-4 py-2 text-sm font-semibold shadow-md shadow-binokio-accent/20 disabled:opacity-40"
+              className="min-h-[44px] shrink-0 touch-manipulation rounded-2xl bg-binokio-accent px-3 py-2 text-sm font-semibold shadow-md shadow-binokio-accent/20 disabled:opacity-40 sm:px-4"
             >
               Send
             </button>
