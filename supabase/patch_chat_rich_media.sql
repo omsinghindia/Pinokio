@@ -66,3 +66,6 @@ create policy "chat_media_delete_own"
     bucket_id = 'chat-media'
     and split_part (name, '/', 2) = auth.uid ()::text
   );
+
+-- Tell PostgREST to reload the schema cache (avoids stale API errors right after ALTER).
+notify pgrst, 'reload schema';
