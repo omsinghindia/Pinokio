@@ -16,16 +16,11 @@ function getSocketBaseUrl () {
   return 'http://localhost:4000';
 }
 
-/** Polling first is more reliable through mobile networks and some CDNs / proxies. */
+/**
+ * Prefer WebSocket first: avoids "xhr poll error" when long-polling XHR is blocked by CORS/proxies.
+ * Falls back to polling if the WebSocket upgrade fails.
+ */
 function socketTransports () {
-  if (import.meta.env.PROD) {
-    return ['polling', 'websocket'];
-  }
-  if (typeof navigator === 'undefined') return ['websocket', 'polling'];
-  const ua = navigator.userAgent || '';
-  if (/iPhone|iPad|iPod|Android/i.test(ua)) {
-    return ['polling', 'websocket'];
-  }
   return ['websocket', 'polling'];
 }
 
@@ -62,15 +57,16 @@ export function useSocket () {
 
     const s = io(base, {
       auth: { token: accessToken },
-      path: '/socket.io/',
+      path: '/socket.io',
       transports: socketTransports(),
       upgrade: true,
-      rememberUpgrade: false,
-      timeout: 25000,
+      rememberUpgrade: true,
+      withCredentials: false,
+      timeout: 60000,
       reconnection: true,
-      reconnectionAttempts: 12,
-      reconnectionDelay: 800,
-      reconnectionDelayMax: 10000,
+      reconnectionAttempts: 15,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 15000,
       forceNew: false
     });
 
@@ -80,9 +76,15 @@ export function useSocket () {
     }
 
     function onConnectError (err) {
-      const msg =
-        err?.message ||
-        'Cannot reach chat server. Check VITE_SOCKET_URL and that the API allows your site in FRONTEND_URL.';
+      const raw = err?.message || '';
+      let msg = raw;
+      if (/xhr poll error|poll error/i.test(raw)) {
+        msg =
+          'Cannot connect to chat server (network or CORS). On Render, set FRONTEND_URL to your exact site URL (e.g. https://your-app.vercel.app). On Vercel, set VITE_SOCKET_URL to your HTTPS API. Redeploy both.';
+      } else if (!raw) {
+        msg =
+          'Cannot reach chat server. Check VITE_SOCKET_URL and FRONTEND_URL, then redeploy.';
+      }
       setError(msg);
       setStatus('error');
     }

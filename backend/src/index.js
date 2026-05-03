@@ -47,12 +47,28 @@ function isOriginAllowed (origin) {
   return false;
 }
 
+/**
+ * CORS callback that echoes the browser Origin when allowed.
+ * Required for Socket.IO Engine.IO polling (XHR); boolean `true` alone can mis-set headers on some stacks.
+ */
+function corsOriginCallback (origin, cb) {
+  if (!origin) {
+    cb(null, true);
+    return;
+  }
+  if (isOriginAllowed(origin)) {
+    cb(null, origin);
+    return;
+  }
+  cb(null, false);
+}
+
 app.use(
   cors({
-    origin (origin, cb) {
-      cb(null, isOriginAllowed(origin));
-    },
-    credentials: true
+    origin: corsOriginCallback,
+    credentials: false,
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
   })
 );
 app.use(express.json());
@@ -76,15 +92,15 @@ app.get('/api/me', requireAuth, (req, res) => {
 
 const io = new Server(server, {
   cors: {
-    origin (origin, cb) {
-      cb(null, isOriginAllowed(origin));
-    },
-    methods: ['GET', 'POST'],
-    credentials: true
+    origin: corsOriginCallback,
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: false
   },
+  allowEIO3: false,
   pingTimeout: 60000,
   pingInterval: 25000,
-  connectTimeout: 45000
+  connectTimeout: 60000
 });
 
 attachSocketIO(io);
@@ -93,6 +109,14 @@ const PORT = Number(process.env.PORT) || 4000;
 server.listen(PORT, () => {
   console.log(`BINOKIO backend listening on http://localhost:${PORT}`);
   console.log(
-    `CORS allow-list: ${rawOrigins.join(', ') || '(none)'}; dev localhost: ${!isProd}`
+    `CORS allow-list (normalized): ${[...allowedOriginsNorm].join(', ') || '(none)'}; dev localhost: ${!isProd}`
   );
+  const looksLocalOnly = rawOrigins.every(
+    (o) => /localhost|127\.0\.0\.1/i.test(o)
+  );
+  if (looksLocalOnly && (isProd || process.env.RENDER)) {
+    console.warn(
+      'BINOKIO: FRONTEND_URL is only localhost — browsers on your live site will get xhr poll / CORS errors. Set FRONTEND_URL on the host to your real HTTPS app URL (comma-separate multiple).'
+    );
+  }
 });
