@@ -96,13 +96,13 @@ export function useSocket () {
       let msg = raw;
       if (/xhr poll error|poll error/i.test(raw)) {
         msg =
-          'Cannot connect to chat (polling failed). Set Render FRONTEND_URL to your exact site URL and Vercel VITE_SOCKET_URL to https://your-api.onrender.com — then redeploy both.';
+          'Chat cannot connect — this is a hosting setup issue, not a problem with the person you are messaging. Whoever deploys the app must set the API’s FRONTEND_URL to this site’s exact URL (e.g. https://your-app.vercel.app) and the frontend’s VITE_SOCKET_URL to the HTTPS API (e.g. https://your-api.onrender.com), then redeploy both.';
       } else if (/websocket error|ws error/i.test(raw)) {
         msg =
-          'Realtime connection failed. Use an HTTPS API URL in VITE_SOCKET_URL (not http:// on an HTTPS site). If it still fails, set VITE_SOCKET_FORCE_POLLING=true on the frontend and redeploy.';
+          'Realtime failed — not your match’s fault. Deployers: use an HTTPS API in VITE_SOCKET_URL on the frontend host (never http:// on an HTTPS site). If needed, set VITE_SOCKET_FORCE_POLLING=1 and redeploy.';
       } else if (!raw) {
         msg =
-          'Cannot reach chat server. Check VITE_SOCKET_URL (https) and FRONTEND_URL, then redeploy.';
+          'Cannot reach the chat server. Deployers: set VITE_SOCKET_URL (HTTPS) and FRONTEND_URL on the API, then redeploy.';
       }
       setError(msg);
       setStatus('error');
