@@ -12,6 +12,8 @@ import { requireAuth } from './middleware/auth.js';
 import { attachSocketIO } from './socket/index.js';
 
 const app = express();
+/** Render / proxies: correct secure scheme for clients behind TLS termination */
+app.set('trust proxy', 1);
 const server = http.createServer(app);
 
 const rawOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
@@ -98,6 +100,9 @@ const io = new Server(server, {
     credentials: false
   },
   allowEIO3: false,
+  /** Helps some proxies / load balancers that mishandle compressed WS frames */
+  perMessageDeflate: false,
+  httpCompression: { threshold: 2048 },
   pingTimeout: 60000,
   pingInterval: 25000,
   connectTimeout: 60000

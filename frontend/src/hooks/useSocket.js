@@ -3,12 +3,20 @@ import { io } from 'socket.io-client';
 import { useAuth } from '../contexts/AuthContext';
 
 /**
- * Production / explicit: VITE_SOCKET_URL (e.g. Render HTTPS URL).
- * Local dev: same origin as Vite so `/socket.io` is proxied (see vite.config.js).
+ * Production: VITE_SOCKET_URL (Render etc.) must be HTTPS when the web app is HTTPS,
+ * or the browser blocks WebSocket / XHR (mixed content).
  */
 function getSocketBaseUrl () {
   const fromEnv = import.meta.env.VITE_SOCKET_URL?.trim();
-  if (fromEnv) return fromEnv.replace(/\/$/, '');
+  if (fromEnv) {
+    let base = fromEnv.replace(/\/$/, '');
+    if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+      if (base.startsWith('http://')) {
+        base = `https://${base.slice('http://'.length)}`;
+      }
+    }
+    return base;
+  }
   if (import.meta.env.DEV) return window.location.origin;
   if (typeof window !== 'undefined') {
     return window.location.origin;
@@ -17,11 +25,18 @@ function getSocketBaseUrl () {
 }
 
 /**
- * Prefer WebSocket first: avoids "xhr poll error" when long-polling XHR is blocked by CORS/proxies.
- * Falls back to polling if the WebSocket upgrade fails.
+ * Polling first: opens the Engine.IO session over HTTP (reliable with CORS). Then upgrades
+ * to WebSocket when possible. Putting WebSocket first often surfaces "websocket error" on
+ * mobile / strict networks before any session exists.
  */
 function socketTransports () {
-  return ['websocket', 'polling'];
+  const force =
+    import.meta.env.VITE_SOCKET_FORCE_POLLING === '1' ||
+    import.meta.env.VITE_SOCKET_FORCE_POLLING === 'true';
+  if (force) {
+    return ['polling'];
+  }
+  return ['polling', 'websocket'];
 }
 
 /**
@@ -55,12 +70,13 @@ export function useSocket () {
     setStatus('connecting');
     setError(null);
 
+    const transports = socketTransports();
     const s = io(base, {
       auth: { token: accessToken },
       path: '/socket.io',
-      transports: socketTransports(),
-      upgrade: true,
-      rememberUpgrade: true,
+      transports,
+      upgrade: transports.length > 1,
+      rememberUpgrade: false,
       withCredentials: false,
       timeout: 60000,
       reconnection: true,
@@ -80,10 +96,13 @@ export function useSocket () {
       let msg = raw;
       if (/xhr poll error|poll error/i.test(raw)) {
         msg =
-          'Cannot connect to chat server (network or CORS). On Render, set FRONTEND_URL to your exact site URL (e.g. https://your-app.vercel.app). On Vercel, set VITE_SOCKET_URL to your HTTPS API. Redeploy both.';
+          'Cannot connect to chat (polling failed). Set Render FRONTEND_URL to your exact site URL and Vercel VITE_SOCKET_URL to https://your-api.onrender.com — then redeploy both.';
+      } else if (/websocket error|ws error/i.test(raw)) {
+        msg =
+          'Realtime connection failed. Use an HTTPS API URL in VITE_SOCKET_URL (not http:// on an HTTPS site). If it still fails, set VITE_SOCKET_FORCE_POLLING=true on the frontend and redeploy.';
       } else if (!raw) {
         msg =
-          'Cannot reach chat server. Check VITE_SOCKET_URL and FRONTEND_URL, then redeploy.';
+          'Cannot reach chat server. Check VITE_SOCKET_URL (https) and FRONTEND_URL, then redeploy.';
       }
       setError(msg);
       setStatus('error');
