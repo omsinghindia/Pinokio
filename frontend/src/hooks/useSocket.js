@@ -96,7 +96,7 @@ export function useSocket () {
       let msg = raw;
       if (/xhr poll error|poll error/i.test(raw)) {
         msg =
-          'Chat cannot connect — this is a hosting setup issue, not a problem with the person you are messaging. Whoever deploys the app must set the API’s FRONTEND_URL to this site’s exact URL (e.g. https://your-app.vercel.app) and the frontend’s VITE_SOCKET_URL to the HTTPS API (e.g. https://your-api.onrender.com), then redeploy both.';
+          'Chat cannot connect (hosting). On Render: set FRONTEND_URL to the exact URL in your browser’s address bar (your Vercel link, https, no slash at end). On Vercel: VITE_SOCKET_URL = your Render API https URL. Redeploy both. If you use a different Vercel preview URL, add FRONTEND_ALLOW_VERCEL=true on Render or add that URL to FRONTEND_URL. Test: open YOUR-RENDER-URL/api/cors-check?origin=PASTE-YOUR-VERCEL-URL — wouldAllow should be true.';
       } else if (/websocket error|ws error/i.test(raw)) {
         msg =
           'Realtime failed — not your match’s fault. Deployers: use an HTTPS API in VITE_SOCKET_URL on the frontend host (never http:// on an HTTPS site). If needed, set VITE_SOCKET_FORCE_POLLING=1 and redeploy.';

@@ -35,12 +35,27 @@ function normalizeOrigin (origin) {
 
 const allowedOriginsNorm = new Set(rawOrigins.map(normalizeOrigin));
 
+/** Set FRONTEND_ALLOW_VERCEL=true on Render if chat fails from *.vercel.app preview / alt deployment URLs. */
+const allowVercelSubdomains =
+  process.env.FRONTEND_ALLOW_VERCEL === '1' ||
+  process.env.FRONTEND_ALLOW_VERCEL === 'true';
+
+const vercelOriginRe = /^https:\/\/[a-z0-9][a-z0-9.-]*\.vercel\.app$/i;
+
+function isVercelPreviewOrigin (origin) {
+  const n = normalizeOrigin(origin);
+  return vercelOriginRe.test(n);
+}
+
 /** Allow configured origins (case/host normalized); in dev also allow localhost / 127.0.0.1 on any port. */
 function isOriginAllowed (origin) {
   if (!origin) {
     return true;
   }
   if (allowedOriginsNorm.has(normalizeOrigin(origin))) {
+    return true;
+  }
+  if (allowVercelSubdomains && isVercelPreviewOrigin(origin)) {
     return true;
   }
   if (!isProd) {
@@ -62,6 +77,13 @@ function corsOriginCallback (origin, cb) {
     cb(null, origin);
     return;
   }
+  console.warn(
+    '[BINOKIO] CORS rejected Origin:',
+    origin,
+    '| Configured:',
+    [...allowedOriginsNorm].join(', ') || '(empty)',
+    allowVercelSubdomains ? '| FRONTEND_ALLOW_VERCEL=on' : ''
+  );
   cb(null, false);
 }
 
@@ -88,6 +110,27 @@ app.get('/', (_req, res) => {
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, service: 'binokio-backend' });
+});
+
+/**
+ * Diagnostic: does this Origin pass CORS? Call as GET .../api/cors-check?origin=https://yoursite.vercel.app
+ * (no secrets). Helps fix "chat cannot connect" when FRONTEND_URL does not match the URL in the address bar.
+ */
+app.get('/api/cors-check', (req, res) => {
+  const test = (req.query.origin || req.query.o || '').trim();
+  const payload = {
+    ok: true,
+    configuredOrigins: [...allowedOriginsNorm],
+    frontendAllowVercel: allowVercelSubdomains,
+    nodeEnv: process.env.NODE_ENV || '(unset)',
+    hint:
+      'Open your app from the same URL you put in FRONTEND_URL on Render. Add ?origin=https://exact-address-bar-url to test.'
+  };
+  if (test) {
+    payload.testOrigin = test;
+    payload.wouldAllow = isOriginAllowed(test);
+  }
+  res.json(payload);
 });
 
 /**
@@ -125,7 +168,7 @@ const PORT = Number(process.env.PORT) || 4000;
 server.listen(PORT, () => {
   console.log(`BINOKIO backend listening on http://localhost:${PORT}`);
   console.log(
-    `CORS allow-list (normalized): ${[...allowedOriginsNorm].join(', ') || '(none)'}; dev localhost: ${!isProd}`
+    `CORS allow-list (normalized): ${[...allowedOriginsNorm].join(', ') || '(none)'}; dev localhost: ${!isProd}; FRONTEND_ALLOW_VERCEL: ${allowVercelSubdomains}`
   );
   const looksLocalOnly = rawOrigins.every(
     (o) => /localhost|127\.0\.0\.1/i.test(o)
