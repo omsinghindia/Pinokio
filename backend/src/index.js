@@ -75,6 +75,17 @@ app.use(
 );
 app.use(express.json());
 
+/** Browsers opening the Render URL directly — this host is the API + Socket.IO, not the React app. */
+app.get('/', (_req, res) => {
+  res.json({
+    ok: true,
+    service: 'binokio-backend',
+    message:
+      'This URL is the realtime API (REST + Socket.IO). Open your Vercel frontend in the browser; point VITE_SOCKET_URL here.',
+    health: '/api/health'
+  });
+});
+
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, service: 'binokio-backend' });
 });
