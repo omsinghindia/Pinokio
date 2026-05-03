@@ -56,12 +56,23 @@ export default function Chat () {
   const localStreamRef = useRef(null);
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
+  const partnerIdRef = useRef(null);
+  /** ICE candidates received before setRemoteDescription completes (common on fast networks). */
+  const pendingIceRef = useRef([]);
+  /** Caller user id (offer) so Accept works if partnerId state is still loading. */
+  const incomingFromUserIdRef = useRef(null);
   const [inCall, setInCall] = useState(false);
   const [incomingOffer, setIncomingOffer] = useState(null);
   const [camOn, setCamOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
 
+  useEffect(() => {
+    partnerIdRef.current = partnerId;
+  }, [partnerId]);
+
   const endCallLocal = useCallback(() => {
+    pendingIceRef.current = [];
+    incomingFromUserIdRef.current = null;
     if (pcRef.current) {
       pcRef.current.close();
       pcRef.current = null;
@@ -81,6 +92,28 @@ export default function Chat () {
     setCamOn(true);
     setMicOn(true);
   }, []);
+
+  /** Match-scoped peer: server only relays between matched users; allow before partnerId hydrates. */
+  function isMediaPeer (fromUserId, mid) {
+    if (!fromUserId || String(mid) !== String(matchId)) return false;
+    if (String(fromUserId) === String(user.id)) return false;
+    const expected = partnerIdRef.current;
+    if (expected && String(fromUserId) !== String(expected)) return false;
+    return true;
+  }
+
+  async function flushPendingIce (pc) {
+    if (!pc) return;
+    const batch = pendingIceRef.current;
+    pendingIceRef.current = [];
+    for (const candidate of batch) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (e) {
+        console.warn('BINOKIO: addIceCandidate', e);
+      }
+    }
+  }
 
   const stopLiveShare = useCallback((mid) => {
     const id = mid ?? matchId;
@@ -211,7 +244,7 @@ export default function Chat () {
   }, [socket, matchId]);
 
   useEffect(() => {
-    if (!socket || !matchId || !partnerId) return;
+    if (!socket || !matchId) return;
 
     function onMessage (row) {
       if (!row?.id) return;
@@ -223,58 +256,88 @@ export default function Chat () {
     }
 
     function onPresence ({ userId, status, matchId: mid }) {
-      if (mid !== matchId || userId !== partnerId) return;
+      if (String(mid) !== String(matchId)) return;
+      if (!userId || String(userId) === String(user.id)) return;
+      if (partnerIdRef.current && String(userId) !== String(partnerIdRef.current)) {
+        return;
+      }
       setPartnerOnline(status === 'online');
     }
 
     function onTypingStart ({ userId, matchId: mid }) {
-      if (mid !== matchId || userId !== partnerId) return;
+      if (String(mid) !== String(matchId)) return;
+      if (!userId || String(userId) === String(user.id)) return;
+      if (partnerIdRef.current && String(userId) !== String(partnerIdRef.current)) {
+        return;
+      }
       setTyping(true);
     }
 
     function onTypingStop ({ userId, matchId: mid }) {
-      if (mid !== matchId || userId !== partnerId) return;
+      if (String(mid) !== String(matchId)) return;
+      if (!userId || String(userId) === String(user.id)) return;
+      if (partnerIdRef.current && String(userId) !== String(partnerIdRef.current)) {
+        return;
+      }
       setTyping(false);
     }
 
     function onOffer ({ fromUserId, matchId: mid, sdp }) {
-      if (mid !== matchId || fromUserId !== partnerId) return;
-      setIncomingOffer(sdp);
+      if (!isMediaPeer(fromUserId, mid)) return;
+      if (!sdp?.type || typeof sdp.sdp !== 'string') return;
+      incomingFromUserIdRef.current = fromUserId;
+      setIncomingOffer({ type: sdp.type, sdp: sdp.sdp });
     }
 
-    function onAnswer ({ fromUserId, matchId: mid, sdp }) {
-      if (mid !== matchId || fromUserId !== partnerId) return;
-      if (!pcRef.current) return;
-      pcRef.current.setRemoteDescription(new RTCSessionDescription(sdp)).catch(
-        console.error
-      );
+    async function onAnswer ({ fromUserId, matchId: mid, sdp }) {
+      if (!isMediaPeer(fromUserId, mid)) return;
+      const pc = pcRef.current;
+      if (!pc || !sdp?.type || typeof sdp.sdp !== 'string') return;
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+        await flushPendingIce(pc);
+      } catch (e) {
+        console.error('BINOKIO: setRemoteDescription (answer)', e);
+      }
     }
 
     function onIce ({ fromUserId, matchId: mid, candidate }) {
-      if (mid !== matchId || fromUserId !== partnerId) return;
-      if (!candidate || !pcRef.current) return;
-      pcRef.current
-        .addIceCandidate(new RTCIceCandidate(candidate))
-        .catch(console.error);
+      if (!isMediaPeer(fromUserId, mid) || !candidate) return;
+      const pc = pcRef.current;
+      if (!pc || !pc.remoteDescription?.type) {
+        pendingIceRef.current.push(candidate);
+        return;
+      }
+      pc.addIceCandidate(new RTCIceCandidate(candidate)).catch((e) =>
+        console.warn('BINOKIO: addIceCandidate', e)
+      );
     }
 
     function onCallReject ({ fromUserId, matchId: mid }) {
-      if (mid !== matchId || fromUserId !== partnerId) return;
+      if (!isMediaPeer(fromUserId, mid)) return;
       endCallLocal();
     }
 
     function onCallEnd ({ fromUserId, matchId: mid }) {
-      if (mid !== matchId || fromUserId !== partnerId) return;
+      if (!isMediaPeer(fromUserId, mid)) return;
       endCallLocal();
     }
 
     function onLiveLoc (p) {
-      if (p.matchId !== matchId || p.userId !== partnerId) return;
+      if (String(p.matchId) !== String(matchId)) return;
+      if (!p.userId || String(p.userId) === String(user.id)) return;
+      if (partnerIdRef.current && String(p.userId) !== String(partnerIdRef.current)) {
+        return;
+      }
       setPartnerLiveLoc({ lat: p.lat, lng: p.lng, at: p.at || Date.now() });
     }
 
     function onLiveStop (p) {
-      if (p.matchId !== matchId || p.userId !== partnerId) return;
+      if (String(p.matchId) !== String(matchId)) return;
+      if (!p.userId || String(p.userId) === String(user.id)) return;
+      if (partnerIdRef.current && String(p.userId) !== String(partnerIdRef.current)) {
+        return;
+      }
       setPartnerLiveLoc(null);
     }
 
@@ -303,7 +366,7 @@ export default function Chat () {
       socket.off('location:live', onLiveLoc);
       socket.off('location:live:stop', onLiveStop);
     };
-  }, [socket, matchId, partnerId, endCallLocal]);
+  }, [socket, matchId, user.id, endCallLocal]);
 
   useEffect(() => {
     const last = messages[messages.length - 1];
@@ -573,7 +636,11 @@ export default function Chat () {
   }
 
   async function acceptCall () {
-    if (!socket || !partnerId || !incomingOffer) return;
+    const remotePeerId = partnerId || incomingFromUserIdRef.current;
+    if (!socket || !incomingOffer || !remotePeerId) {
+      setSendError('Still connecting — wait a moment and try Accept again.');
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: true,
@@ -592,7 +659,7 @@ export default function Chat () {
       pc.onicecandidate = (ev) => {
         if (ev.candidate && socket) {
           socket.emit('webrtc:ice', {
-            toUserId: partnerId,
+            toUserId: remotePeerId,
             matchId,
             candidate: ev.candidate.toJSON()
           });
@@ -606,11 +673,12 @@ export default function Chat () {
       };
 
       await pc.setRemoteDescription(new RTCSessionDescription(incomingOffer));
+      await flushPendingIce(pc);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
       socket.emit('webrtc:answer', {
-        toUserId: partnerId,
+        toUserId: remotePeerId,
         matchId,
         sdp: {
           type: pc.localDescription.type,
@@ -619,19 +687,26 @@ export default function Chat () {
       });
 
       setIncomingOffer(null);
+      incomingFromUserIdRef.current = null;
       setInCall(true);
     } catch (err) {
       console.error(err);
-      setSendError('Could not answer call.');
+      const hint =
+        err?.name === 'NotAllowedError'
+          ? 'Camera or microphone permission denied.'
+          : err?.message || 'Could not answer call.';
+      setSendError(hint);
       endCallLocal();
     }
   }
 
   function rejectCall () {
-    if (socket && partnerId) {
-      socket.emit('call:reject', { toUserId: partnerId, matchId });
+    const remotePeerId = partnerId || incomingFromUserIdRef.current;
+    if (socket && remotePeerId) {
+      socket.emit('call:reject', { toUserId: remotePeerId, matchId });
     }
     setIncomingOffer(null);
+    incomingFromUserIdRef.current = null;
   }
 
   function endCall () {
