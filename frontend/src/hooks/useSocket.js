@@ -2,7 +2,16 @@ import { useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from '../contexts/AuthContext';
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:4000';
+/**
+ * Production / explicit: VITE_SOCKET_URL (e.g. Render).
+ * Local dev: same origin as Vite so `/socket.io` is proxied to the backend (see vite.config.js).
+ */
+function getSocketBaseUrl () {
+  const fromEnv = import.meta.env.VITE_SOCKET_URL;
+  if (fromEnv) return fromEnv;
+  if (import.meta.env.DEV) return window.location.origin;
+  return 'http://localhost:4000';
+}
 
 /**
  * Single Socket.IO connection per logged-in user, recreated when the JWT rotates.
@@ -20,7 +29,7 @@ export function useSocket () {
       return;
     }
 
-    const s = io(SOCKET_URL, {
+    const s = io(getSocketBaseUrl(), {
       auth: { token: accessToken },
       transports: ['websocket', 'polling']
     });
