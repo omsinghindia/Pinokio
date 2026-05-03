@@ -62,6 +62,7 @@ export function attachSocketIO (io) {
         return next(new Error('Unauthorized'));
       }
       socket.userId = user.id;
+      socket.data.userId = user.id;
       socket.accessToken = token;
       next();
     } catch (e) {
@@ -89,6 +90,32 @@ export function attachSocketIO (io) {
       socket.join(`match:${mid}`);
     }
 
+    for (const mid of matchIds) {
+      socket.to(`match:${mid}`).emit('user:presence', {
+        userId,
+        status: 'online',
+        matchId: mid
+      });
+    }
+
+    for (const mid of matchIds) {
+      try {
+        const peers = await io.in(`match:${mid}`).fetchSockets();
+        for (const other of peers) {
+          if (other.id === socket.id) continue;
+          const oid = other.data?.userId;
+          if (!oid) continue;
+          socket.emit('user:presence', {
+            userId: oid,
+            status: 'online',
+            matchId: mid
+          });
+        }
+      } catch (e) {
+        console.warn('BINOKIO: presence snapshot', mid, e?.message || e);
+      }
+    }
+
     // Let clients join a match room after connect (e.g. new match created post-connect)
     socket.on('join:match', async (payload, cb) => {
       try {
@@ -103,6 +130,21 @@ export function attachSocketIO (io) {
           status: 'online',
           matchId
         });
+        try {
+          const peers = await io.in(`match:${matchId}`).fetchSockets();
+          for (const other of peers) {
+            if (other.id === socket.id) continue;
+            const oid = other.data?.userId;
+            if (!oid) continue;
+            socket.emit('user:presence', {
+              userId: oid,
+              status: 'online',
+              matchId
+            });
+          }
+        } catch (e) {
+          console.warn('BINOKIO: join:match presence snapshot', e?.message || e);
+        }
         if (typeof cb === 'function') cb({ ok: true });
       } catch (e) {
         if (typeof cb === 'function') cb({ ok: false });
@@ -115,11 +157,6 @@ export function attachSocketIO (io) {
         socket.leave(`match:${matchId}`);
       }
     });
-
-    // Tell partners in each match room we're online
-    for (const mid of matchIds) {
-      socket.to(`match:${mid}`).emit('user:presence', { userId, status: 'online', matchId: mid });
-    }
 
     // --- Chat: persist to Supabase then broadcast ---
     socket.on('chat:send', async (payload, ack) => {

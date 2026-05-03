@@ -14,7 +14,8 @@ import ChatMessageBubble from '../components/chat/ChatMessageBubble';
 export default function Chat () {
   const { matchId } = useParams();
   const { user } = useAuth();
-  const socket = useSocket();
+  const { socket, status: realtimeStatus, error: realtimeError } = useSocket();
+  const socketReady = Boolean(socket?.connected);
   const socketRef = useRef(socket);
   useEffect(() => {
     socketRef.current = socket;
@@ -267,7 +268,7 @@ export default function Chat () {
 
   const emitChat = useCallback(
     (payload, rollback) => {
-      if (!socket) return;
+      if (!socket?.connected) return;
       setSendError('');
       socket.emit('chat:send', { matchId, ...payload }, (res) => {
         if (!res?.ok) {
@@ -288,7 +289,7 @@ export default function Chat () {
 
   function sendChat (e) {
     e.preventDefault();
-    if (!socket || !input.trim() || uploading || recording) return;
+    if (!socket?.connected || !input.trim() || uploading || recording) return;
     const text = input.trim();
     setInput('');
     socket.emit('typing:stop', { matchId });
@@ -297,7 +298,7 @@ export default function Chat () {
 
   function onInputChange (v) {
     setInput(v);
-    if (!socket || !matchId) return;
+    if (!socket?.connected || !matchId) return;
     socket.emit('typing:start', { matchId });
     if (typingTimeout.current) {
       clearTimeout(typingTimeout.current);
@@ -308,7 +309,7 @@ export default function Chat () {
   }
 
   async function sendFile (kind, file) {
-    if (!socket || !matchId || !user?.id || uploading || recording) return;
+    if (!socket?.connected || !matchId || !user?.id || uploading || recording) return;
     setAttachOpen(false);
     setUploading(true);
     setSendError('');
@@ -367,7 +368,7 @@ export default function Chat () {
   }
 
   function startLiveLocation () {
-    if (!socket || !matchId) return;
+    if (!socket?.connected || !matchId) return;
     if (!navigator.geolocation) {
       setSendError('Location not supported.');
       return;
@@ -403,7 +404,7 @@ export default function Chat () {
   }
 
   async function startRecording () {
-    if (!socket || uploading || recording) return;
+    if (!socket?.connected || uploading || recording) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       recordStreamRef.current = stream;
@@ -530,7 +531,9 @@ export default function Chat () {
             {partner?.full_name || 'Chat'}
           </h1>
           <p className="truncate text-[11px] text-binokio-muted sm:text-xs">
-            {!socket ? (
+            {realtimeStatus === 'error' ? (
+              <span className="text-red-300/90">Chat unavailable</span>
+            ) : !socketReady ? (
               <span className="text-amber-300/90">Connecting…</span>
             ) : partnerOnline ? (
               <span className="text-emerald-400">Online</span>
@@ -542,6 +545,12 @@ export default function Chat () {
           </p>
         </div>
       </div>
+
+      {realtimeStatus === 'error' && realtimeError ? (
+        <div className="rounded-xl border border-red-500/40 bg-red-950/50 px-3 py-2 text-xs text-red-100 sm:text-sm">
+          {realtimeError}
+        </div>
+      ) : null}
 
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-b from-binokio-card/50 to-black/30 shadow-xl shadow-black/20">
         {partnerLiveLoc ? (
@@ -674,7 +683,7 @@ export default function Chat () {
             <button
               type="button"
               onClick={() => setAttachOpen((o) => !o)}
-              disabled={!socket || uploading || recording}
+              disabled={!socketReady || uploading || recording}
               className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-full border border-white/15 bg-white/5 text-lg leading-none transition hover:bg-white/10 disabled:opacity-40"
               aria-label="Attach"
             >
@@ -699,7 +708,7 @@ export default function Chat () {
                 onClick={() =>
                   recording ? stopRecording(true) : startRecording()
                 }
-                disabled={!socket || uploading}
+                disabled={!socketReady || uploading}
                 className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-full border border-white/15 bg-white/5 text-lg transition hover:bg-white/10 disabled:opacity-40"
                 aria-label="Voice message"
               >
@@ -708,7 +717,7 @@ export default function Chat () {
             )}
             <button
               type="submit"
-              disabled={!socket || !input.trim() || uploading || recording}
+              disabled={!socketReady || !input.trim() || uploading || recording}
               className="min-h-[44px] shrink-0 touch-manipulation rounded-2xl bg-binokio-accent px-3 py-2 text-sm font-semibold shadow-md shadow-binokio-accent/20 disabled:opacity-40 sm:px-4"
             >
               Send

@@ -21,12 +21,24 @@ const rawOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
 
 const isProd = process.env.NODE_ENV === 'production';
 
-/** Allow configured origins; in development also allow any localhost / 127.0.0.1 port (Vite may use 5174, etc.). */
+function normalizeOrigin (origin) {
+  if (!origin || typeof origin !== 'string') return '';
+  try {
+    const u = new URL(origin);
+    return `${u.protocol}//${u.host}`.toLowerCase();
+  } catch {
+    return origin.replace(/\/$/, '').toLowerCase();
+  }
+}
+
+const allowedOriginsNorm = new Set(rawOrigins.map(normalizeOrigin));
+
+/** Allow configured origins (case/host normalized); in dev also allow localhost / 127.0.0.1 on any port. */
 function isOriginAllowed (origin) {
   if (!origin) {
     return true;
   }
-  if (rawOrigins.includes(origin)) {
+  if (allowedOriginsNorm.has(normalizeOrigin(origin))) {
     return true;
   }
   if (!isProd) {
@@ -35,12 +47,14 @@ function isOriginAllowed (origin) {
   return false;
 }
 
-app.use(cors({
-  origin (origin, cb) {
-    cb(null, isOriginAllowed(origin));
-  },
-  credentials: true
-}));
+app.use(
+  cors({
+    origin (origin, cb) {
+      cb(null, isOriginAllowed(origin));
+    },
+    credentials: true
+  })
+);
 app.use(express.json());
 
 app.get('/api/health', (_req, res) => {
@@ -65,8 +79,12 @@ const io = new Server(server, {
     origin (origin, cb) {
       cb(null, isOriginAllowed(origin));
     },
-    methods: ['GET', 'POST']
-  }
+    methods: ['GET', 'POST'],
+    credentials: true
+  },
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  connectTimeout: 45000
 });
 
 attachSocketIO(io);
